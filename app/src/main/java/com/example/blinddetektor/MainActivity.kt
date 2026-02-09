@@ -11,7 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.example.blinddetektor.camera.CameraController
-import com.example.blinddetektor.ml.YoloV8OnnxDetector
+import com.example.blinddetektor.ml.YoloV11OnnxDetector
 import com.example.blinddetektor.speech.RelevancePolicy
 import com.example.blinddetektor.speech.SpeechManager
 import com.example.blinddetektor.ui.OverlayView
@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
   private lateinit var btnSpeakNow: Button
   private lateinit var btnToggleAuto: Button
 
-  private var detector: YoloV8OnnxDetector? = null
+  private var detector: YoloV11OnnxDetector? = null
   private lateinit var speech: SpeechManager
   private lateinit var policy: RelevancePolicy
   private var cameraController: CameraController? = null
@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun initDetectorSafely() {
-    val modelName = "yolov8n.onnx"
+    val modelName = "yolo11n.onnx"
     val labelsName = "labels_cs.json"
 
     try {
@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
         return
       }
 
-      val d = YoloV8OnnxDetector(
+      val d = YoloV11OnnxDetector(
         context = this,
         modelAssetName = modelName,
         labelsAssetName = labelsName,
