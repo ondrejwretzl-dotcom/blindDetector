@@ -2,11 +2,12 @@ name: Android CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main"]
   workflow_dispatch: {}
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
@@ -29,6 +30,12 @@ jobs:
       - name: Verify Gradle
         run: gradle -v
 
-      # ? TADY se skuteènì zbuildí APK
-      - name: Build Debug APK
+      # Build bez wrapperu
+      - name: Build Debug
+        run: gradle --no-daemon assembleDebug
 
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: blindDetection-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
