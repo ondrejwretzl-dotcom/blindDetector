@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent">
+
+  <androidx.camera.view.PreviewView
+    android:id="@+id/previewView"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:contentDescription="@string/camera_preview_desc" />
+
+  <com.example.blinddetektor.ui.OverlayView
+    android:id="@+id/overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" />
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_gravity="bottom"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <Button
+      android:id="@+id/btnSpeakNow"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:text="@string/speak_relevant" />
+
+    <Button
+      android:id="@+id/btnToggleAuto"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="8dp"
+      android:text="@string/auto_off" />
+  </LinearLayout>
+
+</FrameLayout>

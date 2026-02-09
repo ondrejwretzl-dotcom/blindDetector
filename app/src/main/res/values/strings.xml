@@ -1,0 +1,7 @@
+<resources>
+  <string name="app_name">Blind Detektor</string>
+  <string name="camera_preview_desc">Náhled z kamery</string>
+  <string name="speak_relevant">Přečíst relevantní</string>
+  <string name="auto_off">Průběžné hlášení: Vypnuto</string>
+  <string name="auto_on">Průběžné hlášení: Zapnuto</string>
+</resources>
