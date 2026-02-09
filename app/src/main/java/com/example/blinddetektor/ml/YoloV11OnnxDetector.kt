@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.*
 
-class YoloV8OnnxDetector(
+class YoloV11OnnxDetector(
   private val context: Context,
   modelAssetName: String,
   labelsAssetName: String,
@@ -178,7 +178,7 @@ class YoloV8OnnxDetector(
     var coordScaleHint = "unknown"
     var sampleLogged = false
 
-    // YOLOv8 export typicky: [1,84,8400] => channels_first
+    // YOLOv11 export typicky: [1,84,8400] => channels_first
     if (d1 == 84) {
       val n = d2
       for (i in 0 until n) {
