@@ -7,16 +7,23 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.example.blinddetektor.util.BDLogger
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.system.measureTimeMillis
 
 class CameraController(
   private val activity: LifecycleOwner,
   private val previewView: PreviewView,
+  private val logger: BDLogger,
   private val onFrame: (image: androidx.camera.core.ImageProxy, rotationDegrees: Int) -> Unit
 ) {
 
   private val cameraExecutor = Executors.newSingleThreadExecutor()
   private var cameraProvider: ProcessCameraProvider? = null
+
+  private val frameCounter = AtomicInteger(0)
+  @Volatile private var lastFpsAt = System.currentTimeMillis()
 
   @SuppressLint("UnsafeOptInUsageError")
   fun start() {
@@ -36,18 +43,32 @@ class CameraController(
 
       analysis.setAnalyzer(cameraExecutor) { image ->
         val rotation = image.imageInfo.rotationDegrees
-        onFrame(image, rotation)
-        image.close()
+        try {
+          val ms = measureTimeMillis { onFrame(image, rotation) }
+          val n = frameCounter.incrementAndGet()
+          val now = System.currentTimeMillis()
+          if (now - lastFpsAt >= 2000) {
+            val fps = n * 1000.0 / (now - lastFpsAt).toDouble()
+            logger.log("camera_frames fps=${String.format("%.1f", fps)} lastOnFrameMs=$ms rot=$rotation size=${image.width}x${image.height}")
+            frameCounter.set(0)
+            lastFpsAt = now
+          }
+        } catch (t: Throwable) {
+          logger.logE("camera_onFrame exception", t)
+        } finally {
+          image.close()
+        }
       }
 
       val selector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
-
       provider.unbindAll()
       provider.bindToLifecycle(activity, selector, preview, analysis)
+      logger.log("camera_bind OK")
     }, ContextCompat.getMainExecutor(previewView.context))
   }
 
   fun stop() {
+    logger.log("camera_stop")
     cameraProvider?.unbindAll()
     cameraExecutor.shutdown()
   }
