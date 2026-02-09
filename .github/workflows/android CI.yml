@@ -2,12 +2,11 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main"]
+    branches: ["main"]
   workflow_dispatch: {}
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
@@ -19,20 +18,17 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
-      # Provision Gradle (bez wrapperu) + cache
+      # Pokud chceš bez wrapperu:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.7
-          cache-disabled: false
 
       - name: Verify Gradle
         run: gradle -v
 
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: BlindDetektor-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+      # ? TADY se skuteènì zbuildí APK
+      - name: Build Debug APK
 
