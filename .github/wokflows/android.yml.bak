@@ -1,0 +1,48 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: gradle
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Vygeneruje yolov8n.onnx do assets z GitHub Secret (base64)
+      - name: Restore YOLOv8n model into assets
+        env:
+          YOLOV8N_ONNX_B64: ${{ secrets.YOLOV8N_ONNX_B64 }}
+        run: |
+          if [ -z "$YOLOV8N_ONNX_B64" ]; then
+            echo "Missing secret YOLOV8N_ONNX_B64"
+            exit 1
+          fi
+          mkdir -p app/src/main/assets
+          echo "$YOLOV8N_ONNX_B64" | base64 -d > app/src/main/assets/yolov8n.onnx
+          ls -lh app/src/main/assets/yolov8n.onnx
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlindDetektor-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
