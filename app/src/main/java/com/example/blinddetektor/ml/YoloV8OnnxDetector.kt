@@ -38,10 +38,10 @@ class YoloV8OnnxDetector(
   var onDetections: ((List<Detection>, Int, Int, Long) -> Unit)? = null
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-  // hrubý odhad vertikálního FOV (můžeš doladit podle zařízení)
+  // hrubý odhad vertikálního FOV (doladíš podle telefonu)
   private val assumedVerticalFovDeg = 60.0
 
-  // velmi hrubé "reálné výšky" objektů (metry) pro přibližný odhad vzdálenosti
+  // typické výšky objektů v metrech (pro odhad vzdálenosti)
   private val classHeightsM = mapOf(
     "osoba" to 1.70f,
     "židle" to 0.90f,
@@ -52,7 +52,8 @@ class YoloV8OnnxDetector(
     "notebook" to 0.25f,
     "mobil" to 0.15f,
     "láhev" to 0.28f,
-    "hrnek" to 0.10f,
+    // podle tebe: hrnek ~8cm
+    "hrnek" to 0.08f,
     "kniha" to 0.24f
   )
 
@@ -113,6 +114,7 @@ class YoloV8OnnxDetector(
   }
 
   private fun preprocess(src: Bitmap): Triple<OnnxTensor, Float, Float> {
+    // Pozn.: tady děláme "stretch" do 640x640 (bez letterbox). Mapování zpět proto používá scaleX/scaleY zvlášť.
     val resized = Bitmap.createScaledBitmap(src, inputSize, inputSize, true)
 
     val floatBuffer = FloatBuffer.allocate(1 * 3 * inputSize * inputSize)
@@ -173,43 +175,83 @@ class YoloV8OnnxDetector(
     val d2 = shape[2].toInt()
 
     var maxScore = 0f
+    var coordScaleHint = "unknown"
+    var sampleLogged = false
 
-    // tvůj model má shape [1,84,8400] -> channels_first
+    // YOLOv8 export typicky: [1,84,8400] => channels_first
     if (d1 == 84) {
       val n = d2
       for (i in 0 until n) {
-        val cx = arr[0 * n + i]
-        val cy = arr[1 * n + i]
-        val w  = arr[2 * n + i]
-        val h  = arr[3 * n + i]
+        var cx = arr[0 * n + i]
+        var cy = arr[1 * n + i]
+        var w  = arr[2 * n + i]
+        var h  = arr[3 * n + i]
+
+        // ✅ KRITICKÝ FIX: některé exporty dávají xywh normalizované 0..1 (místo 0..640).
+        // Pokud to vypadá jako normalizované, přepočti na pixelové souřadnice v input prostoru (0..640).
+        val looksNormalized = (max(max(cx, cy), max(w, h)) <= 1.5f)
+        if (looksNormalized) {
+          cx *= inputSize
+          cy *= inputSize
+          w *= inputSize
+          h *= inputSize
+          coordScaleHint = "normalized_xywh"
+        } else {
+          coordScaleHint = "pixel_xywh"
+        }
+
         var bestC = -1
         var bestS = 0f
         for (c in 0 until 80) {
           val s = arr[(4 + c) * n + i]
           if (s > bestS) { bestS = s; bestC = c }
         }
+
+        if (!sampleLogged && bestS > 0.6f) {
+          sampleLogged = true
+          logger.log("sample_xywh $coordScaleHint cx=$cx cy=$cy w=$w h=$h score=$bestS cls=$bestC scaleX=$scaleX scaleY=$scaleY frame=${frameW}x${frameH}")
+        }
+
         if (bestS > maxScore) maxScore = bestS
         if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
       }
-      logger.log("decode_layout=channels_first n=$n maxScore=$maxScore candidates=${candidates.size}")
+      logger.log("decode_layout=channels_first n=$n maxScore=$maxScore candidates=${candidates.size} coordScale=$coordScaleHint")
     } else if (d2 == 84) {
       val n = d1
       for (i in 0 until n) {
         val base = i * 84
-        val cx = arr[base + 0]
-        val cy = arr[base + 1]
-        val w  = arr[base + 2]
-        val h  = arr[base + 3]
+        var cx = arr[base + 0]
+        var cy = arr[base + 1]
+        var w  = arr[base + 2]
+        var h  = arr[base + 3]
+
+        val looksNormalized = (max(max(cx, cy), max(w, h)) <= 1.5f)
+        if (looksNormalized) {
+          cx *= inputSize
+          cy *= inputSize
+          w *= inputSize
+          h *= inputSize
+          coordScaleHint = "normalized_xywh"
+        } else {
+          coordScaleHint = "pixel_xywh"
+        }
+
         var bestC = -1
         var bestS = 0f
         for (c in 0 until 80) {
           val s = arr[base + 4 + c]
           if (s > bestS) { bestS = s; bestC = c }
         }
+
+        if (!sampleLogged && bestS > 0.6f) {
+          sampleLogged = true
+          logger.log("sample_xywh $coordScaleHint cx=$cx cy=$cy w=$w h=$h score=$bestS cls=$bestC scaleX=$scaleX scaleY=$scaleY frame=${frameW}x${frameH}")
+        }
+
         if (bestS > maxScore) maxScore = bestS
         if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
       }
-      logger.log("decode_layout=anchors_last n=$n maxScore=$maxScore candidates=${candidates.size}")
+      logger.log("decode_layout=anchors_last n=$n maxScore=$maxScore candidates=${candidates.size} coordScale=$coordScaleHint")
     } else {
       logger.logE("unexpected output dims d1=$d1 d2=$d2 (expected 84xN or Nx84)")
       return emptyList()
@@ -219,12 +261,13 @@ class YoloV8OnnxDetector(
     logger.log("nms kept=${nms.size}")
 
     return nms.map { cand ->
-      // YOLOv8 outputs are in input-space pixels (0..640). Convert to frame pixels via scale.
+      // cx,cy,w,h jsou v INPUT prostoru (0..640) => převod na frame pixely přes scaleX/scaleY
       val x1px = (cand.cx - cand.w / 2f) * scaleX
       val y1px = (cand.cy - cand.h / 2f) * scaleY
       val x2px = (cand.cx + cand.w / 2f) * scaleX
       val y2px = (cand.cy + cand.h / 2f) * scaleY
 
+      // normalizace do 0..1 ve FRAME prostoru
       val nx1 = (x1px / frameW).coerceIn(0f, 1f)
       val ny1 = (y1px / frameH).coerceIn(0f, 1f)
       val nx2 = (x2px / frameW).coerceIn(0f, 1f)
@@ -232,18 +275,24 @@ class YoloV8OnnxDetector(
 
       val label = labelsCs[cand.cls] ?: "objekt"
 
-      // distance: based on pixel height in frame + assumed focal length from FOV
+      // vzdálenost: z výšky bboxu v pixelech + FOV => fy
       val boxHPx = max(1f, (ny2 - ny1) * frameH.toFloat())
       val fy = (frameH.toFloat() / 2f) / tan(Math.toRadians(assumedVerticalFovDeg / 2.0)).toFloat()
-      val realH = classHeightsM[label] ?: 0.50f // fallback 50cm
-      val dist = (realH * fy / boxHPx).coerceIn(0.2f, 20f)
+      val realH = classHeightsM[label] ?: 0.50f
+      val dist = (realH * fy / boxHPx).coerceIn(0.05f, 20f)
 
-      // direction (left/center/right) in normalized frame coords
+      // směr v rámci obrazu (po rotaci)
       val cxn = (nx1 + nx2) / 2f
       val pos = when {
         cxn < 0.33f -> "vlevo"
         cxn > 0.66f -> "vpravo"
         else -> "uprostřed"
+      }
+
+      // jednorázově zaloguj pár bboxů po převodu, ať hned vidíme jestli to sedí
+      if (!sampleLogged) {
+        sampleLogged = true
+        logger.log("sample_bbox label=$label nx1=$nx1 ny1=$ny1 nx2=$nx2 ny2=$ny2 boxHPx=$boxHPx dist=$dist pos=$pos")
       }
 
       Detection(label, cand.score, nx1, ny1, nx2, ny2, dist, pos)
