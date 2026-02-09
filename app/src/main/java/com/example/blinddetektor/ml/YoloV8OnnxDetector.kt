@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.FloatBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.*
 
@@ -19,7 +20,6 @@ class YoloV8OnnxDetector(
   labelsAssetName: String,
 ) : AutoCloseable {
 
-  // Tuning (v1)
   private val inputSize = 640
   private val confThreshold = 0.35f
   private val iouThreshold = 0.45f
@@ -28,14 +28,11 @@ class YoloV8OnnxDetector(
   private val session: OrtSession
   private val labelsCs: Map<Int, String>
 
-  // Throttling inference to reduce CPU load (e.g., 4 FPS)
   private val minInferenceIntervalMs = 250L
   private val lastInferenceAt = AtomicLong(0L)
-
-  @Volatile private var lastDetections: List<Detection> = emptyList()
+  private val busy = AtomicBoolean(false)
 
   var onDetections: ((List<Detection>, Int, Int) -> Unit)? = null
-
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
   init {
@@ -49,26 +46,30 @@ class YoloV8OnnxDetector(
     val last = lastInferenceAt.get()
     if (now - last < minInferenceIntervalMs) return
     if (!lastInferenceAt.compareAndSet(last, now)) return
+    if (!busy.compareAndSet(false, true)) return
 
     val bitmap = image.toBitmap()
     val rotated = bitmap.rotate(rotationDegrees.toFloat())
 
     scope.launch {
-      val (inputTensor, scaleX, scaleY) = preprocess(rotated)
-      val outputs = session.run(mapOf(session.inputNames.first() to inputTensor))
-      inputTensor.close()
+      try {
+        val (inputTensor, scaleX, scaleY) = preprocess(rotated)
+        val outputs = session.run(mapOf(session.inputNames.first() to inputTensor))
+        inputTensor.close()
 
-      val dets = postprocess(outputs, scaleX, scaleY, rotated.width, rotated.height)
-      outputs.close()
+        val dets = postprocess(outputs, scaleX, scaleY, rotated.width, rotated.height)
+        outputs.close()
 
-      lastDetections = dets
-      withContext(Dispatchers.Main) {
-        onDetections?.invoke(dets, rotated.width, rotated.height)
+        withContext(Dispatchers.Main) {
+          onDetections?.invoke(dets, rotated.width, rotated.height)
+        }
+      } catch (_: Throwable) {
+        // nikdy neshazuj appku kvůli jedné inference
+      } finally {
+        busy.set(false)
       }
     }
   }
-
-  fun getLastDetections(): List<Detection> = lastDetections
 
   private fun preprocess(src: Bitmap): Triple<OnnxTensor, Float, Float> {
     val resized = Bitmap.createScaledBitmap(src, inputSize, inputSize, true)
@@ -80,14 +81,10 @@ class YoloV8OnnxDetector(
     var idxR = 0
     var idxG = inputSize * inputSize
     var idxB = 2 * inputSize * inputSize
-
     for (p in pixels) {
-      val r = ((p shr 16) and 0xFF) / 255f
-      val g = ((p shr 8) and 0xFF) / 255f
-      val b = (p and 0xFF) / 255f
-      floatBuffer.put(idxR++, r)
-      floatBuffer.put(idxG++, g)
-      floatBuffer.put(idxB++, b)
+      floatBuffer.put(idxR++, ((p shr 16) and 0xFF) / 255f)
+      floatBuffer.put(idxG++, ((p shr 8) and 0xFF) / 255f)
+      floatBuffer.put(idxB++, (p and 0xFF) / 255f)
     }
 
     val shape = longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
@@ -105,54 +102,45 @@ class YoloV8OnnxDetector(
     frameW: Int,
     frameH: Int
   ): List<Detection> {
-
     val tensor = outputs[0].value as? FloatArray ?: return emptyList()
     val info = outputs[0].info as? TensorInfo ?: return emptyList()
-
     val shape = info.shape
     if (shape.size != 3) return emptyList()
 
     val candidates = mutableListOf<Candidate>()
-
     val d1 = shape[1].toInt()
     val d2 = shape[2].toInt()
 
     if (d2 == 84) {
-      // [1, N, 84]
       val n = d1
       for (i in 0 until n) {
         val base = i * 84
         val cx = tensor[base + 0]
         val cy = tensor[base + 1]
-        val w  = tensor[base + 2]
-        val h  = tensor[base + 3]
+        val w = tensor[base + 2]
+        val h = tensor[base + 3]
         var bestC = -1
         var bestS = 0f
         for (c in 0 until 80) {
           val s = tensor[base + 4 + c]
           if (s > bestS) { bestS = s; bestC = c }
         }
-        if (bestS >= confThreshold) {
-          candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
-        }
+        if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
       }
     } else if (d1 == 84) {
-      // [1, 84, N]
       val n = d2
       for (i in 0 until n) {
         val cx = tensor[0 * n + i]
         val cy = tensor[1 * n + i]
-        val w  = tensor[2 * n + i]
-        val h  = tensor[3 * n + i]
+        val w = tensor[2 * n + i]
+        val h = tensor[3 * n + i]
         var bestC = -1
         var bestS = 0f
         for (c in 0 until 80) {
           val s = tensor[(4 + c) * n + i]
           if (s > bestS) { bestS = s; bestC = c }
         }
-        if (bestS >= confThreshold) {
-          candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
-        }
+        if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
       }
     } else {
       return emptyList()
@@ -172,30 +160,16 @@ class YoloV8OnnxDetector(
       val ny2 = (y2 / frameH).coerceIn(0f, 1f)
 
       val label = labelsCs[cand.cls] ?: "objekt"
-      val dist = estimateDistanceMeters(nx1, ny1, nx2, ny2)
-      val pos = positionHint((nx1 + nx2) / 2f)
+      val dist = (0.35f / sqrt(max(1e-6f, (nx2 - nx1) * (ny2 - ny1)))).coerceIn(0.3f, 8f)
+      val cxn = (nx1 + nx2) / 2f
+      val pos = when {
+        cxn < 0.33f -> "vlevo"
+        cxn > 0.66f -> "vpravo"
+        else -> "uprostřed"
+      }
 
-      Detection(
-        labelCs = label,
-        score = cand.score,
-        x1 = nx1, y1 = ny1, x2 = nx2, y2 = ny2,
-        distanceMeters = dist,
-        positionHint = pos
-      )
+      Detection(label, cand.score, nx1, ny1, nx2, ny2, dist, pos)
     }
-  }
-
-  private fun positionHint(cxNorm: Float): String =
-    when {
-      cxNorm < 0.33f -> "vlevo"
-      cxNorm > 0.66f -> "vpravo"
-      else -> "uprostřed"
-    }
-
-  private fun estimateDistanceMeters(x1: Float, y1: Float, x2: Float, y2: Float): Float {
-    val boxArea = max(1e-6f, (x2 - x1) * (y2 - y1))
-    val dist = 0.35f / sqrt(boxArea)
-    return dist.coerceIn(0.3f, 8.0f)
   }
 
   private data class Candidate(
@@ -227,7 +201,7 @@ class YoloV8OnnxDetector(
       val ih = max(0f, iy2 - iy1)
       val inter = iw * ih
       val union = a.w*a.h + b.w*b.h - inter
-      return if (union <= 0f) 0f else inter/union
+      return if (union <= 0f) 0f else inter / union
     }
 
     while (sorted.isNotEmpty()) {
@@ -246,8 +220,7 @@ class YoloV8OnnxDetector(
     val txt = context.assets.open(asset).bufferedReader().use { it.readText() }
     val json = Json.parseToJsonElement(txt).jsonObject
     return json.mapNotNull { (k, v) ->
-      val id = k.toIntOrNull() ?: return@mapNotNull null
-      id to v.jsonPrimitive.content
+      k.toIntOrNull()?.let { it to v.jsonPrimitive.content }
     }.toMap()
   }
 
@@ -258,7 +231,6 @@ class YoloV8OnnxDetector(
   }
 }
 
-/** --- Bitmap utils --- **/
 private fun ImageProxy.toBitmap(): Bitmap {
   val yBuffer = planes[0].buffer
   val uBuffer = planes[1].buffer
@@ -285,3 +257,4 @@ private fun Bitmap.rotate(deg: Float): Bitmap {
   val m = Matrix().apply { postRotate(deg) }
   return Bitmap.createBitmap(this, 0, 0, width, height, m, true)
 }
+
