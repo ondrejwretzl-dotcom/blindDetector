@@ -25,9 +25,16 @@
     android:padding="16dp">
 
     <Button
+      android:id="@+id/btnFindObject"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:text="@string/find_object" />
+
+    <Button
       android:id="@+id/btnSpeakNow"
       android:layout_width="match_parent"
       android:layout_height="wrap_content"
+      android:layout_marginTop="8dp"
       android:text="@string/speak_relevant" />
 
     <Button
@@ -36,6 +43,15 @@
       android:layout_height="wrap_content"
       android:layout_marginTop="8dp"
       android:text="@string/auto_off" />
+
+    <androidx.appcompat.widget.SwitchCompat
+      android:id="@+id/switchUnknown"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="10dp"
+      android:text="@string/hide_unknown_off" />
+
   </LinearLayout>
 
 </FrameLayout>
+

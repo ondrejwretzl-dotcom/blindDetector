@@ -273,7 +273,9 @@ class YoloV8OnnxDetector(
       val nx2 = (x2px / frameW).coerceIn(0f, 1f)
       val ny2 = (y2px / frameH).coerceIn(0f, 1f)
 
+      val hasLabel = labelsCs.containsKey(cand.cls)
       val label = labelsCs[cand.cls] ?: "objekt"
+
 
       // vzdálenost: z výšky bboxu v pixelech + FOV => fy
       val boxHPx = max(1f, (ny2 - ny1) * frameH.toFloat())
@@ -295,7 +297,7 @@ class YoloV8OnnxDetector(
         logger.log("sample_bbox label=$label nx1=$nx1 ny1=$ny1 nx2=$nx2 ny2=$ny2 boxHPx=$boxHPx dist=$dist pos=$pos")
       }
 
-      Detection(label, cand.score, nx1, ny1, nx2, ny2, dist, pos)
+      Detection(label, cand.score, nx1, ny1, nx2, ny2, dist, pos, hasLabel)
     }
   }
 

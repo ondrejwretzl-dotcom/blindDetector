@@ -47,7 +47,7 @@ class RelevancePolicy {
     return filtered
   }
 
-  fun formatForSpeech(dets: List<Detection>, withPositions: Boolean = false): String {
+  fun formatForSpeech(dets: List<Detection>, withPositions: Boolean = true): String {
     val parts = dets.map {
       val dist = it.distanceMeters
       val distText = when {
