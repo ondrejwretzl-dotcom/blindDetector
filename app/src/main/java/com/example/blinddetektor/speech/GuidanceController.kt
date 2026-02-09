@@ -8,7 +8,6 @@ class GuidanceController(private val speech: SpeechManager) {
 
   private var target: String? = null
   private var active = false
-
   private var lastPromptAt = 0L
   private var lastUpdateAt = 0L
   private var lastSpoken = ""
@@ -21,11 +20,11 @@ class GuidanceController(private val speech: SpeechManager) {
     lastPromptAt = 0L
     lastUpdateAt = 0L
     lastSpoken = ""
-    speech.speak("Hled·m $targetLabel. H˝bej prosÌm telefonem, dokud se objekt neobjevÌ v z·bÏru.")
+    speech.speak("Hled√°m $targetLabel. H√Ωbej pros√≠m telefonem, dokud se objekt neobjev√≠ v z√°bƒõru.")
   }
 
   fun stop() {
-    if (active) speech.speak("Navigace ukonËena.")
+    if (active) speech.speak("Navigace ukonƒçena.")
     active = false
     target = null
   }
@@ -45,7 +44,7 @@ class GuidanceController(private val speech: SpeechManager) {
     if (match == null) {
       if (now - lastPromptAt > 2500) {
         lastPromptAt = now
-        speech.speak("ZatÌm nevidÌm $t. Pomalu ot·Ëej telefonem do stran.")
+        speech.speak("Zat√≠m nevid√≠m $t. Pomalu ot√°ƒçej telefonem do stran.")
       }
       return
     }
@@ -53,18 +52,18 @@ class GuidanceController(private val speech: SpeechManager) {
     val dir = when {
       match.x2 < 0.45f -> "je vlevo"
       match.x1 > 0.55f -> "je vpravo"
-      else -> "je uprost¯ed"
+      else -> "je uprost≈ôed"
     }
 
     val action = when {
-      match.x2 < 0.45f -> "OtoË trochu doleva."
-      match.x1 > 0.55f -> "OtoË trochu doprava."
-      match.distanceMeters > 0.6f -> "P¯ibliû se."
-      else -> "Jsi u nÏj."
+      match.x2 < 0.45f -> "Otoƒç trochu doleva."
+      match.x1 > 0.55f -> "Otoƒç trochu doprava."
+      match.distanceMeters > 0.6f -> "P≈ôibli≈æ se."
+      else -> "Jsi u nƒõj."
     }
 
     val distCm = (match.distanceMeters * 100f).toInt().coerceAtLeast(1)
-    val msg = "$t $dir, asi $distCm centimetr˘. $action"
+    val msg = "$t $dir, asi $distCm centimetr≈Ø. $action"
 
     if (msg == lastSpoken) return
     lastSpoken = msg
@@ -83,4 +82,3 @@ class GuidanceController(private val speech: SpeechManager) {
     return d.score * 0.6f + center * 0.2f + proximity * 0.2f
   }
 }
-

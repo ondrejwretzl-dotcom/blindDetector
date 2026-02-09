@@ -8,4 +8,3 @@ fun normalizeCs(s: String): String {
   val norm = Normalizer.normalize(lower, Normalizer.Form.NFD)
   return norm.replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "")
 }
-

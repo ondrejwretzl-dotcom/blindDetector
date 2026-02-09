@@ -4,7 +4,6 @@
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-feature android:name="android.hardware.camera.any" />
 
-  <!-- Pro starší Androidy (<29) kvůli zápisu do veřejné složky Download/ -->
   <uses-permission
       android:name="android.permission.WRITE_EXTERNAL_STORAGE"
       android:maxSdkVersion="28" />
@@ -27,4 +26,3 @@
 
   </application>
 </manifest>
-

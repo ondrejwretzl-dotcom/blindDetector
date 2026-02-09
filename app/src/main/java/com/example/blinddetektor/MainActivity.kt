@@ -33,15 +33,15 @@ class MainActivity : ComponentActivity() {
   private lateinit var switchUnknown: SwitchCompat
 
   private var detector: YoloV8OnnxDetector? = null
+  private var cameraController: CameraController? = null
+
   private lateinit var speech: SpeechManager
   private lateinit var policy: RelevancePolicy
   private lateinit var guidance: GuidanceController
-  private var cameraController: CameraController? = null
+  private lateinit var logger: BDLogger
 
   private var autoEnabled = false
   private var hideUnknown = false
-
-  private lateinit var logger: BDLogger
 
   private val requestCamera = registerForActivityResult(
     ActivityResultContracts.RequestPermission()
@@ -218,21 +218,14 @@ class MainActivity : ComponentActivity() {
         return
       }
 
-      val d = YoloV8OnnxDetector(
-        context = this,
-        modelAssetName = modelName,
-        labelsAssetName = labelsName,
-        logger = logger
-      )
+      val d = YoloV8OnnxDetector(this, modelName, labelsName)
 
-      d.onDetections = { detections, frameW, frameH, inferenceMs ->
+      d.onDetections = { detections, frameW, frameH ->
         val filtered = filterUnknownIfNeeded(detections)
         overlay.updateDetections(filtered, frameW, frameH)
 
-        // navigace má prioritu
+        // navigace má prioritu (nepřekřikovat se s auto čtením)
         guidance.onDetections(filtered)
-
-        logger.log("detections n=${filtered.size} frame=${frameW}x${frameH} infMs=$inferenceMs top=${filtered.take(3).joinToString { it.labelCs + \":\" + String.format(\"%.2f\", it.score) }}")
 
         if (autoEnabled && !guidance.isActive()) {
           val toSpeak = policy.pickForAutoSpeech(filtered)
@@ -262,7 +255,6 @@ class MainActivity : ComponentActivity() {
     cameraController = CameraController(
       activity = this,
       previewView = previewView,
-      logger = logger,
       onFrame = { image, rotationDegrees ->
         detector?.detect(image, rotationDegrees)
       }
@@ -284,4 +276,3 @@ class MainActivity : ComponentActivity() {
     speech.close()
   }
 }
-
