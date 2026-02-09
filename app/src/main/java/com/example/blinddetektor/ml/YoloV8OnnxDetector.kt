@@ -24,7 +24,7 @@ class YoloV8OnnxDetector(
 ) : AutoCloseable {
 
   private val inputSize = 640
-  private val confThreshold = 0.25f   // sníženo pro ladění (uvidíme víc kandidátů)
+  private val confThreshold = 0.25f
   private val iouThreshold = 0.45f
 
   private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -35,10 +35,26 @@ class YoloV8OnnxDetector(
   private val lastInferenceAt = AtomicLong(0L)
   private val busy = AtomicBoolean(false)
 
-  // změna: vracíme i inferenceMs
   var onDetections: ((List<Detection>, Int, Int, Long) -> Unit)? = null
-
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+  // hrubý odhad vertikálního FOV (můžeš doladit podle zařízení)
+  private val assumedVerticalFovDeg = 60.0
+
+  // velmi hrubé "reálné výšky" objektů (metry) pro přibližný odhad vzdálenosti
+  private val classHeightsM = mapOf(
+    "osoba" to 1.70f,
+    "židle" to 0.90f,
+    "gauč" to 0.90f,
+    "postel" to 0.55f,
+    "jídelní stůl" to 0.75f,
+    "televize" to 0.60f,
+    "notebook" to 0.25f,
+    "mobil" to 0.15f,
+    "láhev" to 0.28f,
+    "hrnek" to 0.10f,
+    "kniha" to 0.24f
+  )
 
   init {
     val modelBytes = context.assets.open(modelAssetName).readBytes()
@@ -46,24 +62,15 @@ class YoloV8OnnxDetector(
     val opts = OrtSession.SessionOptions().apply {
       setIntraOpNumThreads(2)
       setInterOpNumThreads(1)
-      // NNAPI jen jako pokus (CPU fallback)
-      try {
-        addNnapi()
-        logger.log("ort_session NNAPI enabled")
-      } catch (t: Throwable) {
-        logger.log("ort_session NNAPI not available: ${t.javaClass.simpleName}: ${t.message}")
-      }
+      try { addNnapi(); logger.log("ort_session NNAPI enabled") }
+      catch (t: Throwable) { logger.log("ort_session NNAPI not available: ${t.javaClass.simpleName}: ${t.message}") }
     }
 
     session = env.createSession(modelBytes, opts)
 
     logger.log("ort_session created inputs=${session.inputNames.joinToString()} outputs=${session.outputNames.joinToString()}")
-    session.inputInfo.forEach { (name, info) ->
-      logger.log("ort_input name=$name info=$info")
-    }
-    session.outputInfo.forEach { (name, info) ->
-      logger.log("ort_output name=$name info=$info")
-    }
+    session.inputInfo.forEach { (name, info) -> logger.log("ort_input name=$name info=$info") }
+    session.outputInfo.forEach { (name, info) -> logger.log("ort_output name=$name info=$info") }
 
     labelsCs = loadLabels(labelsAssetName)
     logger.log("labels_loaded n=${labelsCs.size}")
@@ -90,16 +97,12 @@ class YoloV8OnnxDetector(
         val tInf0 = SystemClock.elapsedRealtime()
         val outputs = session.run(mapOf(inputName to inputTensor))
         inferenceMs = SystemClock.elapsedRealtime() - tInf0
-
         inputTensor.close()
 
         val dets = postprocess(outputs, scaleX, scaleY, rotated.width, rotated.height)
         outputs.close()
 
-        withContext(Dispatchers.Main) {
-          onDetections?.invoke(dets, rotated.width, rotated.height, inferenceMs)
-        }
-
+        withContext(Dispatchers.Main) { onDetections?.invoke(dets, rotated.width, rotated.height, inferenceMs) }
         logger.log("frame_done preMs=$preMs infMs=$inferenceMs dets=${dets.size}")
       } catch (t: Throwable) {
         logger.logE("inference_failed preMs=$preMs infMs=$inferenceMs", t)
@@ -141,7 +144,6 @@ class YoloV8OnnxDetector(
     frameH: Int
   ): List<Detection> {
 
-    // ✅ FIX: správně vyčti výstup jako OnnxTensor a FloatBuffer
     val outVal = outputs[0]
     val outTensor = (outVal as? OnnxTensor) ?: run {
       logger.logE("output[0] is not OnnxTensor, type=${outVal.javaClass.name}")
@@ -172,7 +174,25 @@ class YoloV8OnnxDetector(
 
     var maxScore = 0f
 
-    if (d2 == 84) {
+    // tvůj model má shape [1,84,8400] -> channels_first
+    if (d1 == 84) {
+      val n = d2
+      for (i in 0 until n) {
+        val cx = arr[0 * n + i]
+        val cy = arr[1 * n + i]
+        val w  = arr[2 * n + i]
+        val h  = arr[3 * n + i]
+        var bestC = -1
+        var bestS = 0f
+        for (c in 0 until 80) {
+          val s = arr[(4 + c) * n + i]
+          if (s > bestS) { bestS = s; bestC = c }
+        }
+        if (bestS > maxScore) maxScore = bestS
+        if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
+      }
+      logger.log("decode_layout=channels_first n=$n maxScore=$maxScore candidates=${candidates.size}")
+    } else if (d2 == 84) {
       val n = d1
       for (i in 0 until n) {
         val base = i * 84
@@ -190,23 +210,6 @@ class YoloV8OnnxDetector(
         if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
       }
       logger.log("decode_layout=anchors_last n=$n maxScore=$maxScore candidates=${candidates.size}")
-    } else if (d1 == 84) {
-      val n = d2
-      for (i in 0 until n) {
-        val cx = arr[0 * n + i]
-        val cy = arr[1 * n + i]
-        val w  = arr[2 * n + i]
-        val h  = arr[3 * n + i]
-        var bestC = -1
-        var bestS = 0f
-        for (c in 0 until 80) {
-          val s = arr[(4 + c) * n + i]
-          if (s > bestS) { bestS = s; bestC = c }
-        }
-        if (bestS > maxScore) maxScore = bestS
-        if (bestS >= confThreshold) candidates.add(Candidate(cx, cy, w, h, bestS, bestC))
-      }
-      logger.log("decode_layout=channels_first n=$n maxScore=$maxScore candidates=${candidates.size}")
     } else {
       logger.logE("unexpected output dims d1=$d1 d2=$d2 (expected 84xN or Nx84)")
       return emptyList()
@@ -216,24 +219,33 @@ class YoloV8OnnxDetector(
     logger.log("nms kept=${nms.size}")
 
     return nms.map { cand ->
-      val x1 = (cand.cx - cand.w / 2f) * scaleX
-      val y1 = (cand.cy - cand.h / 2f) * scaleY
-      val x2 = (cand.cx + cand.w / 2f) * scaleX
-      val y2 = (cand.cy + cand.h / 2f) * scaleY
+      // YOLOv8 outputs are in input-space pixels (0..640). Convert to frame pixels via scale.
+      val x1px = (cand.cx - cand.w / 2f) * scaleX
+      val y1px = (cand.cy - cand.h / 2f) * scaleY
+      val x2px = (cand.cx + cand.w / 2f) * scaleX
+      val y2px = (cand.cy + cand.h / 2f) * scaleY
 
-      val nx1 = (x1 / frameW).coerceIn(0f, 1f)
-      val ny1 = (y1 / frameH).coerceIn(0f, 1f)
-      val nx2 = (x2 / frameW).coerceIn(0f, 1f)
-      val ny2 = (y2 / frameH).coerceIn(0f, 1f)
+      val nx1 = (x1px / frameW).coerceIn(0f, 1f)
+      val ny1 = (y1px / frameH).coerceIn(0f, 1f)
+      val nx2 = (x2px / frameW).coerceIn(0f, 1f)
+      val ny2 = (y2px / frameH).coerceIn(0f, 1f)
 
       val label = labelsCs[cand.cls] ?: "objekt"
-      val dist = (0.35f / sqrt(max(1e-6f, (nx2 - nx1) * (ny2 - ny1)))).coerceIn(0.3f, 8f)
+
+      // distance: based on pixel height in frame + assumed focal length from FOV
+      val boxHPx = max(1f, (ny2 - ny1) * frameH.toFloat())
+      val fy = (frameH.toFloat() / 2f) / tan(Math.toRadians(assumedVerticalFovDeg / 2.0)).toFloat()
+      val realH = classHeightsM[label] ?: 0.50f // fallback 50cm
+      val dist = (realH * fy / boxHPx).coerceIn(0.2f, 20f)
+
+      // direction (left/center/right) in normalized frame coords
       val cxn = (nx1 + nx2) / 2f
       val pos = when {
         cxn < 0.33f -> "vlevo"
         cxn > 0.66f -> "vpravo"
         else -> "uprostřed"
       }
+
       Detection(label, cand.score, nx1, ny1, nx2, ny2, dist, pos)
     }
   }
@@ -252,17 +264,14 @@ class YoloV8OnnxDetector(
       val ay1 = a.cy - a.h/2f
       val ax2 = a.cx + a.w/2f
       val ay2 = a.cy + a.h/2f
-
       val bx1 = b.cx - b.w/2f
       val by1 = b.cy - b.h/2f
       val bx2 = b.cx + b.w/2f
       val by2 = b.cy + b.h/2f
-
       val ix1 = max(ax1, bx1)
       val iy1 = max(ay1, by1)
       val ix2 = min(ax2, bx2)
       val iy2 = min(ay2, by2)
-
       val iw = max(0f, ix2 - ix1)
       val ih = max(0f, iy2 - iy1)
       val inter = iw * ih
